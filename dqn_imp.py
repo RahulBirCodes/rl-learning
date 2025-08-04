@@ -7,6 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import gymnasium as gym
+import random
+import time
 
 class MLP(nn.Module):
   def __init__(self, in_dim, out_dim):
@@ -28,14 +30,14 @@ class MLP(nn.Module):
 # Implement DQN algorithm
 
 # Constants
-replay_cap = 1000
+replay_cap = 10000
 obs_space_dim = 4
 action_space_dim = 2
-episodes = 500
+episodes = 1000
 horizon = 500
-eps = 0.1
+eps = 0.2
 discount = 0.99
-C = 10
+C = 100
 minibatch_size = 32
 env = gym.make('CartPole-v1', render_mode='human', max_episode_steps=horizon)
 
@@ -46,21 +48,27 @@ q = MLP(4, 2)
 # Init target action-value func w/ random weights (separate selecting best action and updating val for training stabilization)
 q_hat = MLP(4, 2)
 # Init optimizer
-optimizer = torch.optim.SGD(q.parameters(), lr=0.01, momentum=0.9)
+optimizer = torch.optim.SGD(q.parameters(), lr=0.00025, momentum=0.9)
+# Init c counter
+c_step = 0
 
 # Each episode represents an entire run through the horizon
 for episode in range(episodes):
     # Init state
     obs, _ = env.reset()
     episode_over = False
-    c_step = 0
+    step = 0
 
     # Run the simulation through the horizon
     while not episode_over:
-        # Get action while training based on epsilon-greedy policy
+        step += 1
+        # Get random action with prob eps or act greedily
+        obs = torch.tensor(obs, dtype=torch.float32)
         if torch.rand(1) < eps:
             action = env.action_space.sample()
         else:
+            q_out = q(obs)
+            # We use q network to select action
             action = torch.argmax(q(obs)).item()
 
         # Execute action in emulator and observe reward and next state
@@ -68,16 +76,17 @@ for episode in range(episodes):
         episode_over = terminated or truncated
         
         # Store new experience in replay memory
-        replay_mem.append((obs, action, reward, obs_next, episode_over))
+        if replay_mem.__len__() < replay_cap:
+            replay_mem.append((obs, action, reward, obs_next, episode_over))
 
         # Sample random minibatch from replay mem
-        minibatch = random.sample(replay_mem, minibatch_size)
-        y_j = [exp[2] if exp[4] else exp[2] + discount * torch.max(q_hat(exp[3])) for exp in minibatch]
+        minibatch = random.sample(replay_mem, len(replay_mem) if len(replay_mem) < minibatch_size else minibatch_size)
+        y_j = torch.tensor([float(exp[2]) if exp[4] else float(exp[2]) + discount * torch.max(q_hat(torch.tensor(exp[3], dtype=torch.float32))).item() for exp in minibatch], dtype=torch.float32)
 
         # Calculate loss and perform gradient descent step
-        q_vals = q(torch.stack([exp[0] for exp in minibatch]))
+        q_vals = q(torch.stack([torch.tensor(exp[0]) for exp in minibatch]))
         actions = torch.tensor([exp[1] for exp in minibatch])
-        q_vals = torch.gather(q_vals, 1, actions)
+        q_vals = q_vals[torch.arange(len(minibatch)), actions]
         loss = F.mse_loss(q_vals, torch.tensor(y_j))
         
         # Do only one gradient descent step
@@ -88,6 +97,7 @@ for episode in range(episodes):
         # Update state
         obs = obs_next
         c_step += 1
+        #print("c_step", c_step)
 
         # Every C steps, copy weights from Q to Q_hat
         if c_step % C == 0:
@@ -98,3 +108,28 @@ for episode in range(episodes):
 print("Finished training")
 
 env.close()
+
+
+
+
+
+# Demo agent running in test environment
+
+input("Press Enter to start demo...")
+print("Demo agent running in test environment")
+
+test_env = gym.make('CartPole-v1', render_mode='human')
+
+obs, _ = test_env.reset()
+steps = 0
+lost = False
+while not lost:
+    action = torch.argmax(q(torch.tensor(obs))).item()
+    obs_next, reward, terminated, truncated, _ = test_env.step(action)
+    lost = terminated
+    obs = obs_next
+    steps += 1
+
+print("Steps:", steps)
+print("Finished demo")
+test_env.close()
