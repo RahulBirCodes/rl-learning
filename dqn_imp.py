@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import gymnasium as gym
 import random
 import time
+from collections import deque
 
 class MLP(nn.Module):
   def __init__(self, in_dim, out_dim):
@@ -42,7 +43,7 @@ minibatch_size = 32
 env = gym.make('CartPole-v1', render_mode='human', max_episode_steps=horizon)
 
 # Init replay memory with capacity replay_cap
-replay_mem = []
+replay_mem = deque(maxlen=replay_cap)
 # Init action-value func Q w/ random weights
 q = MLP(4, 2)
 # Init target action-value func w/ random weights (separate selecting best action and updating val for training stabilization)
@@ -76,8 +77,7 @@ for episode in range(episodes):
         episode_over = terminated or truncated
         
         # Store new experience in replay memory
-        if replay_mem.__len__() < replay_cap:
-            replay_mem.append((obs, action, reward, obs_next, episode_over))
+        replay_mem.append((obs, action, reward, obs_next, episode_over))
 
         # Sample random minibatch from replay mem
         minibatch = random.sample(replay_mem, len(replay_mem) if len(replay_mem) < minibatch_size else minibatch_size)
@@ -88,6 +88,9 @@ for episode in range(episodes):
         actions = torch.tensor([exp[1] for exp in minibatch])
         q_vals = q_vals[torch.arange(len(minibatch)), actions]
         loss = F.mse_loss(q_vals, torch.tensor(y_j))
+
+        if episode == 99:
+            print(f"Loss: {loss}")
         
         # Do only one gradient descent step
         optimizer.zero_grad()
